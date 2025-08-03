@@ -7,6 +7,7 @@ interface DynamicTitleWrapperProps {
 }
 
 const DynamicTitleWrapper: React.FC<DynamicTitleWrapperProps> = ({ children }) => {
+  const router = useRouter(); // eslint-disable-line @typescript-eslint/no-unused-vars
 
   useEffect(() => {
     // ページタイトルの動的更新ロジックをここに追加
