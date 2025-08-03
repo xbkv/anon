@@ -97,8 +97,8 @@ export async function GET(request: NextRequest) {
         hasPrevPage: page > 1
       }
     });
-  } catch (err) {
-    console.error("投稿取得エラー:", err);
+  } catch {
+    console.error("投稿取得エラー");
     return NextResponse.json({ error: "投稿の取得に失敗しました" }, { status: 500 });
   }
 }
@@ -139,8 +139,8 @@ export async function POST(request: NextRequest) {
       success: true, 
       post: { ...post, _id: result.insertedId } 
     });
-  } catch (err) {
-    console.error("投稿作成エラー:", err);
+  } catch {
+    console.error("投稿作成エラー");
     return NextResponse.json({ error: "投稿の作成に失敗しました" }, { status: 500 });
   }
 } 
