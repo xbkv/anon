@@ -13,14 +13,17 @@ export default {
         },
         keyframes: {
           slideLeft: {
-            "0%": { transform: "translateX(100%)", opacity: 1 },
-            "100%": { transform: "translateX(-100%)", opacity: 1 },
+            "0%": { transform: "translateX(100%)", opacity: "1" },
+            "100%": { transform: "translateX(-100%)", opacity: "1" },
           },
         },
     },
     colors: {
       background: "var(--background)",
       foreground: "var(--foreground)",
+      "text-primary": "var(--text-color)",
+      "border-primary": "var(--border-color)",
+      "text-shadow": "var(--text-shadow)",
     },
   },
   plugins: [],

@@ -1,5 +1,5 @@
 {
-  "name": "berugochat",
+  "name": "anon",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,11 +9,15 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@types/dompurify": "^3.0.5",
     "@types/grecaptcha": "^3.0.9",
+    "@types/jsdom": "^21.1.7",
     "@types/jsonwebtoken": "^9.0.8",
     "@types/mongodb": "^4.0.6",
     "@types/react-google-recaptcha": "^2.1.9",
     "bcrypt": "^5.1.1",
+    "dompurify": "^3.2.6",
+    "jsdom": "^26.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.12.0",
     "next": "^15.1.5",
@@ -24,6 +28,7 @@
     "react-google-recaptcha": "^3.1.0",
     "react-google-recaptcha-v3": "^1.10.1",
     "recaptcha": "^1.2.1",
+    "sharp": "^0.34.3",
     "uuid": "^11.0.5"
   },
   "devDependencies": {
