@@ -622,7 +622,10 @@ export default function ThreadPage() {
           fetchLatestPosts().then(() => {
             console.log("初期データ取得完了（最新の15個の投稿）");
             setIsLoading(false);
-            startPolling();
+            // 初期データ取得完了後にポーリングを開始
+            setTimeout(() => {
+              startPolling();
+            }, 1000); // 1秒遅延でlastAcquiredPostNumberの設定を待つ
           }).catch((error: any) => {
             console.error("初期データ取得エラー:", error);
             setIsLoading(false);
@@ -823,13 +826,18 @@ export default function ThreadPage() {
     try {
       console.log(`最新の15個の投稿を取得中: threadId=${params.id}`);
       
-      // まずデータベースの最新投稿番号を確認
-      const dbLatestPostNumber = await getLatestPostNumberFromDB();
-      console.log(`DB最新投稿番号: ${dbLatestPostNumber}`);
+      // まず最新投稿番号を取得
+      const latestRes = await fetch(`/api/ajax/get_post.v1/kakikomi/thread/${params.id}/?pre=0&now=0`);
+      if (!latestRes.ok) {
+        console.error("最新投稿番号の取得に失敗");
+        return;
+      }
+      const latestData = await latestRes.json();
+      const dbLatestPostNumber = latestData.latestPostNumber || 0;
       
       // 最新の15個の投稿を取得（最後の15個）
       const startPostNumber = Math.max(1, dbLatestPostNumber - 14);
-      const res = await fetch(`/api/posts?threadId=${params.id}&pre=${startPostNumber - 1}&now=${dbLatestPostNumber}&limit=15`);
+      const res = await fetch(`/api/ajax/get_post.v1/kakikomi/thread/${params.id}/?pre=${startPostNumber - 1}&now=${dbLatestPostNumber}`);
       
       if (res.ok) {
         const data = await res.json();
@@ -842,8 +850,15 @@ export default function ThreadPage() {
         const uniquePosts = getUniquePosts(postsArray);
         setPosts(uniquePosts);
         
-        // 最新の投稿番号を保存（DBの最新投稿番号を使用）
-        setLastAcquiredPostNumber(dbLatestPostNumber);
+        // 最新のレス番号を保存（取得した投稿から計算）
+        if (uniquePosts.length > 0) {
+          const latestPostNumber = Math.max(...uniquePosts.map((p: Post) => p.postNumber || 0));
+          console.log(`初期読み込み: 最新レス番号を設定: ${latestPostNumber}`);
+          setLastAcquiredPostNumber(latestPostNumber);
+        } else {
+          console.log('初期読み込み: レスが見つからないため、lastAcquiredPostNumberを0に設定');
+          setLastAcquiredPostNumber(0);
+        }
         
         // ページネーション情報を設定（最新の15個の投稿を表示する場合は適切に設定）
         const totalPosts = data.pagination?.totalPosts || uniquePosts.length;
@@ -860,22 +875,24 @@ export default function ThreadPage() {
     }
   };
 
-  // データベースの最新投稿番号を取得する関数（キャッシュ付き）
+  // データベースの最新投稿番号を取得する関数（キャッシュ付き、重複防止）
   const getLatestPostNumberFromDB = async () => {
     try {
-      // キャッシュをチェック（1秒以内の同じリクエストはキャッシュを使用）
+      // キャッシュをチェック（2秒以内の同じリクエストはキャッシュを使用）
       const cacheKey = `latest_${params.id}`;
       const cached = sessionStorage.getItem(cacheKey);
       const now = Date.now();
       
       if (cached) {
         const { timestamp, value } = JSON.parse(cached);
-        if (now - timestamp < 1000) { // 1秒以内ならキャッシュを使用
+        if (now - timestamp < 2000) { // 2秒以内ならキャッシュを使用
+          console.log('キャッシュから最新投稿番号を取得:', value);
           return value;
         }
       }
       
-      const response = await fetch(`/api/posts?threadId=${params.id}&page=1&limit=1&getLatestOnly=true`);
+      console.log('APIから最新投稿番号を取得中...');
+      const response = await fetch(`/api/ajax/get_post.v1/kakikomi/thread/${params.id}/?pre=0&now=0`);
       if (!response.ok) {
         throw new Error('最新投稿番号の取得に失敗しました');
       }
@@ -888,6 +905,7 @@ export default function ThreadPage() {
         value: latestNumber
       }));
       
+      console.log('最新投稿番号を取得:', latestNumber);
       return latestNumber;
     } catch (error) {
       console.error('最新投稿番号取得エラー:', error);
@@ -896,6 +914,7 @@ export default function ThreadPage() {
   };
 
   // 軽量な新しい投稿チェック関数（重複防止）
+  // 新しいレス番号を監視してHTMLに追加表示する関数
   const checkForNewPosts = async () => {
     if (hasFetchedAllPosts) return; // 全投稿取得済みの場合はチェックしない
     
@@ -908,50 +927,68 @@ export default function ThreadPage() {
     setIsCheckingNewPosts(true);
     
     try {
-      // データベースの最新投稿番号のみを取得（軽量）
-      const dbLatestPostNumber = await getLatestPostNumberFromDB();
+      // 現在表示済みの最新レス番号を取得
+      const currentLatestPostNumber = lastAcquiredPostNumber;
+      console.log(`現在表示済みの最新レス番号: ${currentLatestPostNumber}`);
       
-      // 差分がある場合のみ新しい投稿を取得
-      if (dbLatestPostNumber > lastAcquiredPostNumber) {
-        const newPostCount = dbLatestPostNumber - lastAcquiredPostNumber;
-        console.log(`新しい投稿を検出: ${newPostCount}件 (${lastAcquiredPostNumber + 1} ～ ${dbLatestPostNumber})`);
+      // lastAcquiredPostNumberが0の場合は初期化中とみなしてスキップ
+      if (currentLatestPostNumber === 0) {
+        console.log('初期化中のため、レス監視をスキップします');
+        return;
+      }
+      
+      // データベースの最新投稿番号を取得（軽量）
+      const dbLatestPostNumber = await getLatestPostNumberFromDB();
+      console.log(`DB最新投稿番号: ${dbLatestPostNumber}`);
+      
+      // 新しいレスがあるかチェック（now以降の確認）
+      if (dbLatestPostNumber > currentLatestPostNumber) {
+        const newPostCount = dbLatestPostNumber - currentLatestPostNumber;
+        console.log(`新しいレスを検出: ${newPostCount}件 (${currentLatestPostNumber + 1} ～ ${dbLatestPostNumber})`);
         
-        // 新しい投稿のみを取得（差分のみ）
-        const response = await fetch(`/api/posts?threadId=${params.id}&pre=${lastAcquiredPostNumber}&now=${dbLatestPostNumber}&limit=${newPostCount}`);
+        // 新しいレスを取得（pre=現在の最新、now=DBの最新）
+        const response = await fetch(`/api/ajax/get_post.v1/kakikomi/thread/${params.id}/?pre=${currentLatestPostNumber}&now=${dbLatestPostNumber}`);
         if (!response.ok) {
-          throw new Error('新しい投稿の取得に失敗しました');
+          throw new Error('新しいレスの取得に失敗しました');
         }
         const data = await response.json();
         
         if (data.posts && data.posts.length > 0) {
-          console.log(`新しい投稿を静かに追加: ${data.posts.length}件`);
+          console.log(`新しいレスをHTMLに追加表示: ${data.posts.length}件`);
+          console.log('取得したレス番号:', data.posts.map((p: Post) => p.postNumber).join(', '));
           
-          // 新しい投稿を静かに追加（アニメーションなし）
+          // 新しいレスをHTMLに静かに追加（アニメーションなし）
           setPosts(prevPosts => {
             const combinedPosts = [...prevPosts, ...data.posts];
             return combinedPosts.sort((a, b) => (a.postNumber || 0) - (b.postNumber || 0));
           });
           
-          // 最新の投稿番号を更新
+          // 最新のレス番号を更新
           setLastAcquiredPostNumber(dbLatestPostNumber);
           
           // 投稿数とページ数を静かに更新
           setTotalPosts(prev => prev + data.posts.length);
           setTotalPages(Math.ceil((totalPosts + data.posts.length) / 15));
           
-          // 新しい投稿の通知（1秒でクリア、目立たない表示）
+          // 新しいレスの通知（1秒でクリア、目立たない表示）
           setNewPosts(data.posts);
           setTimeout(() => setNewPosts([]), 1000);
+          
+          console.log(`レス追加完了: ${data.posts.length}件の新しいレスをHTMLに追加しました`);
+        } else {
+          console.log('新しいレスは検出されましたが、実際のレスデータが取得できませんでした');
         }
+      } else {
+        console.log('新しいレスはありません');
       }
     } catch (error) {
-      console.error('新しい投稿チェックエラー:', error);
+      console.error('新しいレスチェックエラー:', error);
     } finally {
       setIsCheckingNewPosts(false);
     }
   };
 
-  // ポーリングを開始する関数（重複防止）
+  // 定期的に新しいレス番号を監視する関数
   const startPolling = () => {
     // 既存のポーリングを停止
     if (pollingInterval) {
@@ -962,12 +999,14 @@ export default function ThreadPage() {
     // 重複チェック中フラグをリセット
     setIsCheckingNewPosts(false);
     
+    // 定期的に新しいレス番号を監視（例：resまで表示済み → now以降がないか確認）
     const interval = setInterval(() => {
+      console.log('定期的なレス監視を実行中...');
       checkForNewPosts();
-    }, 8000); // 8秒ごとにチェック（静かな更新）
+    }, 5000); // 5秒ごとにチェック（レス監視）
     
     setPollingInterval(interval);
-    console.log('ポーリングを開始しました');
+    console.log('レス監視を開始しました（5秒間隔）');
   };
 
   // 投稿を安全に追加する関数
@@ -1002,6 +1041,7 @@ export default function ThreadPage() {
 
   // 投稿の状態をリセットする関数
   const resetPostsState = () => {
+    console.log('投稿状態をリセット中...');
     setPosts([]);
     setNewPosts([]);
     setOriginalPosts([]);
@@ -1010,6 +1050,7 @@ export default function ThreadPage() {
     setCurrentPage(1);
     setTotalPages(1);
     setTotalPosts(0);
+    console.log('投稿状態のリセット完了');
   };
 
   // ポーリングを停止する関数
@@ -1299,9 +1340,10 @@ export default function ThreadPage() {
         // 新しい投稿を既読にする
         setNewPosts([]);
         
-        // 投稿成功後、最新の投稿番号を更新
-        const dbLatestPostNumber = await getLatestPostNumberFromDB();
-        setLastAcquiredPostNumber(dbLatestPostNumber);
+        // 投稿成功後、最新のレス番号を更新（レス番号を1増やす）
+        const newLatestNumber = lastAcquiredPostNumber + 1;
+        console.log(`投稿成功: lastAcquiredPostNumberを${lastAcquiredPostNumber}から${newLatestNumber}に更新`);
+        setLastAcquiredPostNumber(newLatestNumber);
         
         // 投稿後は最新ページのデータのみ更新（スクロール位置は保持）
         await updateLatestPageData();
