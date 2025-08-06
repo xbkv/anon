@@ -20,7 +20,7 @@ export async function GET(
         thread = await db.collection("threads").findOne({ _id: new ObjectId(id) });
       } catch (error) {
         // ObjectIdで見つからない場合は文字列として検索
-        thread = await db.collection("threads").findOne({ _id: id });
+        thread = await db.collection("threads").findOne({ _id: id as any });
       }
     }
     
