@@ -24,6 +24,10 @@ export interface Post {
   author?: string;
   createdAt: string;
   updatedAt: string;
+  clickPosition?: {
+    top: number;
+    left: number;
+  };
 }
 
 export {};
