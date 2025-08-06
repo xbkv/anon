@@ -4,9 +4,7 @@ const nextConfig: NextConfig = {
   env: {
     CUSTOM_KEY: process.env.CUSTOM_KEY,
   },
-  experimental: {
-    serverComponentsExternalPackages: ['socket.io'],
-  },
+  serverExternalPackages: ['socket.io'],
   async headers() {
     return [
       {
