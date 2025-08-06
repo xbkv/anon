@@ -90,7 +90,7 @@ export async function GET(req: Request) {
       posts: sanitizedSearchResults,
       pagination: {
         currentPage: 1,
-        totalPages: Math.ceil(totalCount / 50),
+        totalPages: Math.ceil(totalCount / 15),
         totalPosts: totalCount,
         postsPerPage: 50
       }

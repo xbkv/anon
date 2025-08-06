@@ -25,7 +25,7 @@ export default function HomePage() {
   const [newHeadlines, setNewHeadlines] = useState<any[]>([]);
   const [isUpdatingHeadlines, setIsUpdatingHeadlines] = useState(false);
   const [headlinesVersion, setHeadlinesVersion] = useState(0); // バージョン管理用
-  const threadsPerPage = 20; // より多くのスレッドを表示
+  const threadsPerPage = 15; // より多くのスレッドを表示
 
   // URLパラメータから検索クエリを取得
   useEffect(() => {
@@ -801,7 +801,7 @@ export default function HomePage() {
                     <div className="ribbon-icon">
                       <i className="fas fa-chevron-left text-xs text-white"></i>
                     </div>
-                    <span>前のページ</span>
+                    <span>前へ</span>
                   </button>
                   
                   <div className="flex items-center gap-2 px-6 py-3 bg-white rounded-full shadow-lg border-2 border-pink-200">
@@ -820,7 +820,7 @@ export default function HomePage() {
                       border: '2px solid #ffb6c1'
                     }}
                   >
-                    <span>次のページ</span>
+                    <span>次へ</span>
                     <div className="ribbon-icon">
                       <i className="fas fa-chevron-right text-xs text-white"></i>
                     </div>

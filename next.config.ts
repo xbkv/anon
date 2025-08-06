@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  experimental: {
-    appDir: true,
-  },
+  // experimental: {
+  //   reactCompiler: true,
+  // },
   images: {
     domains: ['cdn.yay.space'],
     remotePatterns: [

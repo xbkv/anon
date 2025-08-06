@@ -5,7 +5,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const threadId = searchParams.get('threadId');
   const page = parseInt(searchParams.get('page') || '1');
-  const limit = parseInt(searchParams.get('limit') || '40');
+  const limit = parseInt(searchParams.get('limit') || '15');
 
   if (!threadId) {
     return new NextResponse('Thread ID is required', { status: 400 });
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
               }
 
               const totalPosts = await collection.countDocuments({ threadId: threadId });
-              const totalPages = Math.ceil(totalPosts / limit);
+              const totalPages = Math.ceil(totalPosts / 15);
 
               // DOMPurifyを使わずにシンプルに処理
               const sanitizedPosts = latestPosts.map(post => ({

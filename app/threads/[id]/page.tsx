@@ -456,6 +456,9 @@ export default function ThreadPage() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [newPosts, setNewPosts] = useState<Post[]>([]);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasFetchedAllPosts, setHasFetchedAllPosts] = useState(false);
+  const [originalPosts, setOriginalPosts] = useState<Post[]>([]); // 取得前の投稿を保存
   const [lastSeenPostId, setLastSeenPostId] = useState<string | null>(null);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showPostModal, setShowPostModal] = useState(false);
@@ -510,6 +513,12 @@ export default function ThreadPage() {
   const [pollTitle, setPollTitle] = useState("");
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [pollDeadline, setPollDeadline] = useState("3分");
+  
+  // ポーリングシステム用のstate
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  const [lastAcquiredPostNumber, setLastAcquiredPostNumber] = useState<number>(0);
+  const [postIds, setPostIds] = useState<Set<string>>(new Set()); // 投稿IDの重複チェック用
+  const [isCheckingNewPosts, setIsCheckingNewPosts] = useState(false); // 重複実行防止用
 
   const handleAddOption = () => setPollOptions([...pollOptions, ""]);
   const handleRemoveOption = (idx: number) => {
@@ -605,50 +614,61 @@ export default function ThreadPage() {
       const urlPostNumber = getPostNumberFromUrl();
       console.log(`URLから取得した投稿番号: ${urlPostNumber}`);
       
-      if (!urlPostNumber) {
-        // 投稿番号が指定されていない場合は最新ページを取得
-        goToLatestPage().then(() => {
-          console.log("初期データ取得完了（最新ページ）");
-          setIsLoading(false);
-          startSSEConnection();
-        }).catch((error: any) => {
-          console.error("初期データ取得エラー:", error);
-          setIsLoading(false);
-          startSSEConnection();
-        });
-      } else {
+              if (!urlPostNumber) {
+          // 投稿番号が指定されていない場合は最新の15個の投稿を取得
+          console.log("投稿番号が指定されていないため、最新の15個の投稿を取得します");
+          // 状態をリセットしてから取得
+          resetPostsState();
+          fetchLatestPosts().then(() => {
+            console.log("初期データ取得完了（最新の15個の投稿）");
+            setIsLoading(false);
+            startPolling();
+          }).catch((error: any) => {
+            console.error("初期データ取得エラー:", error);
+            setIsLoading(false);
+            startPolling();
+          });
+        } else {
         // 特定の投稿番号が指定されている場合はその投稿を含むページを取得
+        console.log(`投稿番号${urlPostNumber}が指定されているため、その投稿を含むページを取得します`);
         searchPostByNumber(urlPostNumber).then((post) => {
           if (post) {
             // 投稿が見つかった場合、その投稿を含むページを計算して取得
-            const targetPage = Math.ceil(post.postNumber / 40);
+            const targetPage = Math.ceil(post.postNumber / 15); // 15個ずつに修正
             fetchPosts(targetPage).then(() => {
               console.log(`初期データ取得完了（投稿番号${urlPostNumber}を含む${targetPage}ページ目）`);
               setIsLoading(false);
-              startSSEConnection();
+              startPolling();
             });
           } else {
             // 投稿が見つからない場合は最新ページを取得
+            console.log("投稿が見つからないため最新ページを取得");
             goToLatestPage().then(() => {
               console.log("投稿が見つからないため最新ページを取得");
               setIsLoading(false);
-              startSSEConnection();
+              startPolling();
             });
           }
         }).catch((error: any) => {
           console.error("初期データ取得エラー:", error);
           setIsLoading(false);
-          startSSEConnection();
+          startPolling();
         });
       }
     } else {
-      // 通常の更新時はSSE接続を開始
-      console.log("通常更新: SSE接続を開始");
-      startSSEConnection();
+      // 通常の更新時はポーリングを開始
+      console.log("通常更新: ポーリングを開始");
+      startPolling();
     }
 
     // SSE接続を開始する関数
     function startSSEConnection() {
+      // 全投稿を取得済みの場合はSSE接続を開始しない
+      if (hasFetchedAllPosts) {
+        console.log("全投稿を取得済みのため、SSE接続を開始しません");
+        return;
+      }
+      
       // 既存の接続を閉じる
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
@@ -701,6 +721,12 @@ export default function ThreadPage() {
                     console.log(`新しい投稿数: ${actualNewPosts.length}`);
                     console.log(`新しい投稿の投稿番号: ${actualNewPosts.map((p: Post) => p.postNumber).join(', ')}`);
                     
+                    // 全投稿を取得済みの場合は新しい投稿を追加しない
+                    if (hasFetchedAllPosts) {
+                      console.log("全投稿を取得済みのため、新しい投稿の追加を停止します");
+                      return;
+                    }
+                    
                     // 最新ページにいる場合は投稿リストに追加
                     const latestPage = data.pagination?.totalPages || 1;
                     if (currentPage === latestPage) {
@@ -740,29 +766,36 @@ export default function ThreadPage() {
         // 接続が閉じられた場合の処理
         if (eventSource.readyState === EventSource.CLOSED) {
           console.log("SSE接続が閉じられました");
-          // 5秒後に再接続を試行
-          setTimeout(() => {
-            if (!document.hidden) {
-              console.log("SSE接続を再試行します");
-              startSSEConnection();
-            }
-          }, 5000);
+          // 全投稿を取得済みでない場合のみ再接続を試行
+          if (!hasFetchedAllPosts) {
+            setTimeout(() => {
+              if (!document.hidden) {
+                console.log("SSE接続を再試行します");
+                startSSEConnection();
+              }
+            }, 5000);
+          } else {
+            console.log("全投稿を取得済みのため、SSE接続を再試行しません");
+          }
         } else {
           // その他のエラー時は従来のAPIにフォールバック
           fetchPosts(currentPage);
         }
       };
 
-      // ページが非表示になった時の処理
+      // ページが非表示になった時の処理（APIコール削減のため簡素化）
       const handleVisibilityChange = () => {
         if (document.hidden) {
-          console.log("ページが非表示になったため、SSE接続を閉じます");
-          eventSource.close();
+          console.log("ページが非表示になったため、ポーリングを停止します");
+          stopPolling();
         } else {
-          console.log("ページが表示されたため、SSE接続を再開します");
-          setTimeout(() => {
-            startSSEConnection();
-          }, 1000);
+          // 全投稿を取得済みの場合はポーリングを再開しない
+          if (!hasFetchedAllPosts) {
+            console.log("ページが表示されたため、ポーリングを再開します");
+            startPolling();
+          } else {
+            console.log("全投稿を取得済みのため、ポーリングを再開しません");
+          }
         }
       };
 
@@ -779,15 +812,308 @@ export default function ThreadPage() {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
+      // ポーリングを停止
+      stopPolling();
     };
   }, [params.id, isInitialLoad]);
+
+  // 最新の15個の投稿を取得する関数
+  const fetchLatestPosts = async () => {
+    if (!params.id) return;
+    try {
+      console.log(`最新の15個の投稿を取得中: threadId=${params.id}`);
+      
+      // まずデータベースの最新投稿番号を確認
+      const dbLatestPostNumber = await getLatestPostNumberFromDB();
+      console.log(`DB最新投稿番号: ${dbLatestPostNumber}`);
+      
+      // 最新の15個の投稿を取得（最後の15個）
+      const startPostNumber = Math.max(1, dbLatestPostNumber - 14);
+      const res = await fetch(`/api/posts?threadId=${params.id}&pre=${startPostNumber - 1}&now=${dbLatestPostNumber}&limit=15`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        const postsArray = Array.isArray(data.posts) ? data.posts : [];
+        console.log("取得した投稿数:", postsArray.length);
+        console.log("取得した投稿番号:", postsArray.map((p: Post) => p.postNumber).join(', '));
+        console.log("取得した投稿:", postsArray);
+        
+        // 重複を除去してから設定
+        const uniquePosts = getUniquePosts(postsArray);
+        setPosts(uniquePosts);
+        
+        // 最新の投稿番号を保存（DBの最新投稿番号を使用）
+        setLastAcquiredPostNumber(dbLatestPostNumber);
+        
+        // ページネーション情報を設定（最新の15個の投稿を表示する場合は適切に設定）
+        const totalPosts = data.pagination?.totalPosts || uniquePosts.length;
+        // 初期状態では最新の15個を表示するので、全投稿数から計算
+        const totalPages = Math.ceil(totalPosts / 15); // 15個ずつでページ数を計算
+        setCurrentPage(totalPages); // 最新ページを現在のページとして設定
+        setTotalPages(totalPages);
+        setTotalPosts(totalPosts);
+      } else {
+        console.error("最新投稿の取得に失敗");
+      }
+    } catch (error) {
+      console.error("最新投稿取得エラー:", error);
+    }
+  };
+
+  // データベースの最新投稿番号を取得する関数（キャッシュ付き）
+  const getLatestPostNumberFromDB = async () => {
+    try {
+      // キャッシュをチェック（1秒以内の同じリクエストはキャッシュを使用）
+      const cacheKey = `latest_${params.id}`;
+      const cached = sessionStorage.getItem(cacheKey);
+      const now = Date.now();
+      
+      if (cached) {
+        const { timestamp, value } = JSON.parse(cached);
+        if (now - timestamp < 1000) { // 1秒以内ならキャッシュを使用
+          return value;
+        }
+      }
+      
+      const response = await fetch(`/api/posts?threadId=${params.id}&page=1&limit=1&getLatestOnly=true`);
+      if (!response.ok) {
+        throw new Error('最新投稿番号の取得に失敗しました');
+      }
+      const data = await response.json();
+      const latestNumber = data.latestPostNumber || 0;
+      
+      // キャッシュに保存
+      sessionStorage.setItem(cacheKey, JSON.stringify({
+        timestamp: now,
+        value: latestNumber
+      }));
+      
+      return latestNumber;
+    } catch (error) {
+      console.error('最新投稿番号取得エラー:', error);
+      return 0;
+    }
+  };
+
+  // 軽量な新しい投稿チェック関数（重複防止）
+  const checkForNewPosts = async () => {
+    if (hasFetchedAllPosts) return; // 全投稿取得済みの場合はチェックしない
+    
+    // 既にチェック中の場合は重複実行を防ぐ
+    if (isCheckingNewPosts) {
+      console.log('既にチェック中のため、重複実行をスキップ');
+      return;
+    }
+    
+    setIsCheckingNewPosts(true);
+    
+    try {
+      // データベースの最新投稿番号のみを取得（軽量）
+      const dbLatestPostNumber = await getLatestPostNumberFromDB();
+      
+      // 差分がある場合のみ新しい投稿を取得
+      if (dbLatestPostNumber > lastAcquiredPostNumber) {
+        const newPostCount = dbLatestPostNumber - lastAcquiredPostNumber;
+        console.log(`新しい投稿を検出: ${newPostCount}件 (${lastAcquiredPostNumber + 1} ～ ${dbLatestPostNumber})`);
+        
+        // 新しい投稿のみを取得（差分のみ）
+        const response = await fetch(`/api/posts?threadId=${params.id}&pre=${lastAcquiredPostNumber}&now=${dbLatestPostNumber}&limit=${newPostCount}`);
+        if (!response.ok) {
+          throw new Error('新しい投稿の取得に失敗しました');
+        }
+        const data = await response.json();
+        
+        if (data.posts && data.posts.length > 0) {
+          console.log(`新しい投稿を静かに追加: ${data.posts.length}件`);
+          
+          // 新しい投稿を静かに追加（アニメーションなし）
+          setPosts(prevPosts => {
+            const combinedPosts = [...prevPosts, ...data.posts];
+            return combinedPosts.sort((a, b) => (a.postNumber || 0) - (b.postNumber || 0));
+          });
+          
+          // 最新の投稿番号を更新
+          setLastAcquiredPostNumber(dbLatestPostNumber);
+          
+          // 投稿数とページ数を静かに更新
+          setTotalPosts(prev => prev + data.posts.length);
+          setTotalPages(Math.ceil((totalPosts + data.posts.length) / 15));
+          
+          // 新しい投稿の通知（1秒でクリア、目立たない表示）
+          setNewPosts(data.posts);
+          setTimeout(() => setNewPosts([]), 1000);
+        }
+      }
+    } catch (error) {
+      console.error('新しい投稿チェックエラー:', error);
+    } finally {
+      setIsCheckingNewPosts(false);
+    }
+  };
+
+  // ポーリングを開始する関数（重複防止）
+  const startPolling = () => {
+    // 既存のポーリングを停止
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+      setPollingInterval(null);
+    }
+    
+    // 重複チェック中フラグをリセット
+    setIsCheckingNewPosts(false);
+    
+    const interval = setInterval(() => {
+      checkForNewPosts();
+    }, 8000); // 8秒ごとにチェック（静かな更新）
+    
+    setPollingInterval(interval);
+    console.log('ポーリングを開始しました');
+  };
+
+  // 投稿を安全に追加する関数
+  const addPostsSafely = (newPosts: Post[]) => {
+    setPosts(prevPosts => {
+      const existingIds = new Set(prevPosts.map(p => p._id));
+      const uniqueNewPosts = newPosts.filter(post => !existingIds.has(post._id));
+      
+      if (uniqueNewPosts.length === 0) {
+        console.log('重複する投稿がないため、追加しません');
+        return prevPosts;
+      }
+      
+      console.log(`${uniqueNewPosts.length}件の新しい投稿を追加`);
+      const combinedPosts = [...prevPosts, ...uniqueNewPosts];
+      return combinedPosts.sort((a, b) => (a.postNumber || 0) - (b.postNumber || 0));
+    });
+  };
+
+  // 投稿を一意に保つ関数
+  const getUniquePosts = (posts: Post[]) => {
+    const seen = new Set();
+    const seenPostNumbers = new Set();
+    return posts.filter(post => {
+      const duplicateId = seen.has(post._id);
+      const duplicateNumber = seenPostNumbers.has(post.postNumber);
+      seen.add(post._id);
+      seenPostNumbers.add(post.postNumber);
+      return !duplicateId && !duplicateNumber;
+    });
+  };
+
+  // 投稿の状態をリセットする関数
+  const resetPostsState = () => {
+    setPosts([]);
+    setNewPosts([]);
+    setOriginalPosts([]);
+    setHasFetchedAllPosts(false);
+    setLastAcquiredPostNumber(0);
+    setCurrentPage(1);
+    setTotalPages(1);
+    setTotalPosts(0);
+  };
+
+  // ポーリングを停止する関数
+  const stopPolling = () => {
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+      setPollingInterval(null);
+    }
+  };
+
+  // すべての投稿を取得する関数（前のレスを取得ボタン用）
+  const fetchAllPosts = async () => {
+    if (!params.id) return;
+    try {
+      setIsLoadingMore(true);
+      console.log(`すべての投稿を取得中: threadId=${params.id}`);
+      
+      // 取得前の投稿を保存
+      setOriginalPosts(posts);
+      
+      // 取得前の一番古い投稿番号を取得
+      const oldestPostNumber = posts.length > 0 ? Math.min(...posts.map(p => p.postNumber || 0)) : 0;
+      
+      const res = await fetch(`/api/posts?threadId=${params.id}&page=1&limit=1000`);
+      if (res.ok) {
+        const data = await res.json();
+        const postsArray = Array.isArray(data.posts) ? data.posts : [];
+        console.log("取得した投稿数:", postsArray.length);
+        console.log("取得した投稿番号:", postsArray.map((p: Post) => p.postNumber).join(', '));
+        console.log("取得した投稿:", postsArray);
+        
+        // 全投稿を取得するが、現在のページ位置は変更しない（スクロール位置も保持）
+        setPosts(postsArray);
+        // 全投稿を取得した場合は、ページネーション情報は変更しない
+        // 全投稿を取得した後はページネーションは表示されないため
+        // setCurrentPage(1); // 現在のページ位置は変更しない
+        
+        // ボタンが押されたことを記録
+        setHasFetchedAllPosts(true);
+        
+        // 全投稿を取得した後はポーリングを停止
+        console.log("全投稿を取得したため、ポーリングを停止します");
+        stopPolling();
+        
+        // 取得前の一番古い投稿の場所にスクロール
+        setTimeout(() => {
+          const oldestPostElement = document.querySelector(`[data-post-number="${oldestPostNumber}"]`);
+          if (oldestPostElement) {
+            oldestPostElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }, 100); // 少し遅延を入れてDOMの更新を待つ
+      } else {
+        console.error("すべての投稿の取得に失敗");
+      }
+    } catch (error) {
+      console.error("すべての投稿取得エラー:", error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // 投稿番号範囲で投稿を取得する関数
+  const fetchPostsByRange = async (startPostNumber: number, limit: number) => {
+    if (!params.id) return;
+    try {
+      console.log(`投稿番号範囲で取得中: threadId=${params.id}, start=${startPostNumber}, limit=${limit}`);
+      const res = await fetch(`/api/posts?threadId=${params.id}&startPostNumber=${startPostNumber}&limit=${limit}`);
+      if (res.ok) {
+        const data = await res.json();
+        const postsArray = Array.isArray(data.posts) ? data.posts : [];
+        console.log("取得した投稿数:", postsArray.length);
+        console.log("取得した投稿番号:", postsArray.map((p: Post) => p.postNumber).join(', '));
+        console.log("取得した投稿:", postsArray);
+        
+        // 新しい投稿を既存の投稿の前に追加（スクロール位置を保持）
+        setPosts(prev => {
+          const combinedPosts = [...postsArray, ...prev];
+          const uniquePosts = combinedPosts.filter((post, index, self) => 
+            index === self.findIndex(p => p.postNumber === post.postNumber)
+          );
+          const sortedPosts = uniquePosts.sort((a, b) => (a.postNumber || 0) - (b.postNumber || 0));
+          
+          // ページネーション情報を更新
+          const totalPosts = data.pagination?.totalPosts || sortedPosts.length;
+          const totalPages = Math.ceil(totalPosts / 15); // 15個ずつでページ数を計算
+          setTotalPages(totalPages);
+          setTotalPosts(totalPosts);
+          
+          return sortedPosts;
+        });
+      } else {
+        console.error("投稿番号範囲での取得に失敗");
+      }
+    } catch (error) {
+      console.error("投稿番号範囲取得エラー:", error);
+    }
+  };
 
   // 従来のAPI取得関数（フォールバック用）
   const fetchPosts = async (page: number = 1) => {
     if (!params.id) return;
     try {
               console.log(`投稿を取得中: threadId=${params.id}, page=${page}`);
-        const res = await fetch(`/api/posts?threadId=${params.id}&page=${page}&limit=40`);
+        const res = await fetch(`/api/posts?threadId=${params.id}&page=${page}&limit=15`);
         if (res.ok) {
           const data = await res.json();
           const postsArray = Array.isArray(data.posts) ? data.posts : [];
@@ -973,14 +1299,15 @@ export default function ThreadPage() {
         // 新しい投稿を既読にする
         setNewPosts([]);
         
-        // 投稿後は即座に最新ページを取得
-        await goToLatestPage();
-        // 新しい投稿を既読にする
-        setNewPosts([]);
-        // SSE接続を再確立して最新データを取得（他のユーザーにも即座に反映）
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-        }
+        // 投稿成功後、最新の投稿番号を更新
+        const dbLatestPostNumber = await getLatestPostNumberFromDB();
+        setLastAcquiredPostNumber(dbLatestPostNumber);
+        
+        // 投稿後は最新ページのデータのみ更新（スクロール位置は保持）
+        await updateLatestPageData();
+        
+        // 投稿投稿後の即座チェックは削除（ポーリングで十分）
+        
         // 投稿成功メッセージ
         console.log("投稿が正常に送信されました。他のユーザーにも即座に表示されます。");
       } else {
@@ -1263,6 +1590,60 @@ export default function ThreadPage() {
     }
   };
 
+  // 最新ページのデータのみ更新する関数（スクロール位置は保持）
+  const updateLatestPageData = async () => {
+    if (!params.id) return;
+    try {
+      console.log("最新ページデータ更新開始 - スレッドID:", params.id);
+      // まず総投稿数を取得して最新ページを計算
+      const res = await fetch(`/api/posts?threadId=${params.id}&page=1&limit=40`);
+      if (res.ok) {
+        const data = await res.json();
+        console.log("APIレスポンス:", data);
+        console.log("ページネーション情報:", data.pagination);
+        
+        if (data.pagination && data.pagination.totalPages > 0) {
+          const latestPage = data.pagination.totalPages;
+          console.log(`最新ページ: ${latestPage} / 総ページ数: ${data.pagination.totalPages}`);
+          
+          // 最新ページの投稿を取得
+          const latestRes = await fetch(`/api/posts?threadId=${params.id}&page=${latestPage}&limit=40`);
+          if (latestRes.ok) {
+            const latestData = await latestRes.json();
+            const postsArray = Array.isArray(latestData.posts) ? latestData.posts : [];
+            console.log(`最新ページの投稿数: ${postsArray.length}`);
+            
+            // 状態を更新（スクロール位置は保持）
+            setCurrentPage(latestPage);
+            setTotalPages(data.pagination.totalPages);
+            setTotalPosts(data.pagination.totalPosts);
+            setPosts(postsArray);
+            
+            // URLを更新（投稿番号ベース）
+            const newUrl = `/threads/${params.id}`;
+            window.history.pushState({ page: latestPage }, '', newUrl);
+            
+            console.log("最新ページデータ更新完了");
+          } else {
+            console.error("最新ページの投稿取得に失敗");
+          }
+        } else {
+          console.log("ページネーション情報が取得できませんでした");
+          // 1ページのみの場合の処理
+          const postsArray = Array.isArray(data.posts) ? data.posts : [];
+          setPosts(postsArray);
+          setCurrentPage(1);
+          setTotalPages(1);
+          setTotalPosts(postsArray.length);
+        }
+      } else {
+        console.error("APIリクエストに失敗:", res.status);
+      }
+    } catch (error) {
+      console.error("最新ページデータ更新エラー:", error);
+    }
+  };
+
   // 最新のページに移動する関数
   const goToLatestPage = async () => {
     if (!params.id) return;
@@ -1320,7 +1701,7 @@ export default function ThreadPage() {
     }
   };
 
-  // ページネーション処理
+  // ページネーション処理（現在表示されている一番古い投稿の前から15個ずつ取得）
   const handlePageChange = (newPage: number) => {
     console.log(`ページ変更: ${currentPage} → ${newPage}`);
     setCurrentPage(newPage);
@@ -1337,7 +1718,7 @@ export default function ThreadPage() {
       eventSourceRef.current.close();
     }
     
-    // ページ変更時は従来のAPIでデータを取得
+    // 従来のAPIでデータを取得（15個ずつ）
     fetchPosts(newPage).then(() => {
       // データ取得後にSSE接続を再開
       setTimeout(() => {
@@ -1346,8 +1727,8 @@ export default function ThreadPage() {
       }, 1000);
     });
     
-    // ページトップにスクロール
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // スクロール位置は保持（ページトップにスクロールしない）
+    // window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // 投稿番号から投稿を検索する関数
@@ -1480,13 +1861,17 @@ export default function ThreadPage() {
       // 画像タグにcrossorigin属性を追加
       const processedContent = content.replace(/<img/g, '<img crossorigin="anonymous"');
       
-      // 画像投稿でも>>番号を処理（より詳細な処理）
+      // 番号参照を先に処理してから、残りの部分をサニタイズ
       const parts = processedContent.split(/(>>\d+)/g);
+      console.log("画像投稿の分割結果:", parts);
       const result = [];
       
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
+        console.log(`部分 ${i}: "${part}"`);
+        // 改行文字を含む番号参照も検出
         const match = part.match(/^>>(\d+)$/);
+        console.log(`部分 ${i} のマッチ結果:`, match);
         
         if (match) {
           const postNumber = parseInt(match[1]);
@@ -1507,7 +1892,7 @@ export default function ThreadPage() {
         } else {
           // HTMLコンテンツとして処理（画像タグを含む可能性）
           if (part.includes('<img')) {
-            // 画像タグを安全に処理
+            // 画像タグを安全に処理（番号参照が含まれていない部分のみサニタイズ）
             result.push(
               <span
                 key={i}
@@ -1518,8 +1903,8 @@ export default function ThreadPage() {
               />
             );
           } else {
-            // 通常のテキストとして処理
-            result.push(<span key={i}>{part}</span>);
+            // 通常のテキストとして処理（改行文字も適切に表示）
+            result.push(<span key={i} style={{whiteSpace: 'pre-wrap'}}>{part}</span>);
           }
         }
       }
@@ -1538,7 +1923,7 @@ export default function ThreadPage() {
         // 現在のページにない場合でもクリック可能にする（全ページ検索される）
         return (
           <button
-            key={index}
+            key={`ref-${postNumber}-${index}`}
             onClick={async (e) => {
               console.log(`投稿番号ボタンがクリックされました: ${postNumber}`);
               console.log("クリックイベント:", e);
@@ -1553,7 +1938,7 @@ export default function ThreadPage() {
       }
       
       // ハイライト機能を削除 - 通常の投稿表示ではハイライトしない
-      return part;
+      return <span style={{whiteSpace: 'pre-wrap'}}>{part}</span>;
     });
   };
 
@@ -1665,7 +2050,7 @@ export default function ThreadPage() {
           const postNumber = parseInt(match[1]);
           result.push(
             <button
-              key={i}
+              key={`search-ref-${postNumber}-${i}`}
               onClick={async (e) => {
                 console.log(`検索結果画像投稿内の投稿番号ボタンがクリックされました: ${postNumber}`);
                 console.log("検索結果画像投稿内クリックイベント:", e);
@@ -1700,10 +2085,12 @@ export default function ThreadPage() {
               <span key={i}>
                 {highlightedParts.map((highlightPart, highlightIndex) => 
                   regex.test(highlightPart) ? (
-                    <mark key={highlightIndex} className="bg-yellow-300 px-1 rounded font-semibold inline-block">
+                    <mark key={`highlight-${i}-${highlightIndex}`} className="bg-yellow-300 px-1 rounded font-semibold inline-block">
                       {highlightPart}
                     </mark>
-                  ) : highlightPart
+                  ) : (
+                    <span key={`highlight-${i}-${highlightIndex}`}>{highlightPart}</span>
+                  )
                 )}
               </span>
             );
@@ -1724,7 +2111,7 @@ export default function ThreadPage() {
         // 現在のページにない場合でもクリック可能にする（全ページ検索される）
         return (
           <button
-            key={index}
+            key={`search-ref-${postNumber}-${index}`}
             onClick={async (e) => {
               console.log(`検索結果内の投稿番号ボタンがクリックされました: ${postNumber}`);
               console.log("検索結果内クリックイベント:", e);
@@ -1747,10 +2134,12 @@ export default function ThreadPage() {
         <span key={index}>
           {highlightedParts.map((highlightPart, highlightIndex) => 
             regex.test(highlightPart) ? (
-              <mark key={highlightIndex} className="bg-yellow-300 px-1 rounded font-semibold inline-block">
+              <mark key={`highlight-${index}-${highlightIndex}`} className="bg-yellow-300 px-1 rounded font-semibold inline-block">
                 {highlightPart}
               </mark>
-            ) : highlightPart
+            ) : (
+              <span key={`highlight-${index}-${highlightIndex}`}>{highlightPart}</span>
+            )
           )}
         </span>
       );
@@ -1949,7 +2338,7 @@ export default function ThreadPage() {
                           <div className="ribbon-icon">
                             <i className="fas fa-chevron-left text-xs text-white"></i>
                           </div>
-                          <span>前のページ</span>
+                          <span>前へ</span>
                         </button>
                         
                         <div className="flex items-center gap-2 px-6 py-3 bg-white rounded-full shadow-lg border-2 border-pink-200" style={{backgroundColor: '#ffffff'}}>
@@ -1968,7 +2357,7 @@ export default function ThreadPage() {
                             border: '2px solid #ffb6c1'
                           }}
                         >
-                          <span>次のページ</span>
+                          <span>次へ</span>
                           <div className="ribbon-icon">
                             <i className="fas fa-chevron-right text-xs text-white"></i>
                           </div>
@@ -1977,7 +2366,7 @@ export default function ThreadPage() {
                       
                       {/* 表示件数行 */}
                       <div className="text-sm text-gray-600 font-medium bg-white px-4 py-2 rounded-full shadow-md border border-gray-200" style={{backgroundColor: '#ffffff'}}>
-                        全{totalPosts}件中 {((currentPage - 1) * 40) + 1}-{Math.min(currentPage * 40, totalPosts)}件を表示
+                        全{totalPosts}件中 {((currentPage - 1) * 15) + 1}-{Math.min(currentPage * 15, totalPosts)}件を表示
                       </div>
                     </div>
                   )}
@@ -2006,7 +2395,7 @@ export default function ThreadPage() {
                         {searchResults.length > 0 ? (
                           searchResults.map((post, index) => (
                             <div
-                              key={post._id}
+                              key={`search-${post._id}-${post.postNumber}`}
                               className="p-3 border-b border-gray-300 bg-white rounded-lg shadow-md hover:shadow-lg transition-all duration-300"
                               style={{
                                 background: 'linear-gradient(to right, #fbd3e6, #fce4ec)',
@@ -2072,20 +2461,21 @@ export default function ThreadPage() {
                     </div>
                   )}
 
-                  {/* 新しい投稿の表示 */}
+                  {/* 新しい投稿の表示（目立たない） */}
                   {newPosts.length > 0 && (
                     <div style={{
                       background: 'linear-gradient(135deg, #fdf2f8 0%, #fce7f3 50%, #fdf2f8 100%)'
                     }}>
-                      <div className="p-2 bg-red-50 border-b-2 border-red-400">
-                        <span className="text-sm font-medium text-red-700">
-                          🆕 新しい投稿 ({newPosts.length}件)
+                      <div className="p-2 bg-blue-50 border-b border-blue-200">
+                        <span className="text-xs text-blue-600 flex items-center gap-1">
+                          <i className="fas fa-plus text-xs"></i>
+                          新しい投稿 ({newPosts.length}件)
                         </span>
                       </div>
                       {newPosts.map((post, index) => (
                         <div
-                          key={`new-${post._id}`}
-                          className="p-3 border-b border-red-300 bg-red-50 rounded-lg shadow-md hover:shadow-lg transition-all duration-300"
+                          key={`new-${post._id}-${post.postNumber}`}
+                          className="p-3 border-b border-blue-200 bg-blue-50 rounded-lg shadow-sm"
                           style={{
                             background: 'linear-gradient(to right, #fbd3e6, #fce4ec)',
                             backgroundImage: 'url("/back.svg")',
@@ -2109,21 +2499,12 @@ export default function ThreadPage() {
                                 </button>
                                 <span className="text-sm text-gray-700 font-medium">{new Date(post.createdAt).toLocaleString()}</span>
                               </div>
-                              <div className="text-gray-800 leading-relaxed whitespace-pre-wrap break-words ml-0 post-content">
-                                {(() => {
-                                  console.log("新しい投稿内容:", post.content);
-                                  return post.content.includes('<img') ? (
-                                    <div 
-                                      dangerouslySetInnerHTML={{ 
-                                        __html: sanitizeHTML(post.content.replace(/<img/g, '<img crossorigin="anonymous"'))
-                                      }} 
-                                      className="post-content"
-                                    />
-                                  ) : (
-                                    renderPostContent(post.content)
-                                  );
-                                })()}
-                              </div>
+                                                                <div className="text-gray-800 leading-relaxed whitespace-pre-wrap break-words ml-0 post-content">
+                                    {(() => {
+                                      console.log("新しい投稿内容:", post.content);
+                                      return renderPostContent(post.content);
+                                    })()}
+                                  </div>
                             </div>
                           </div>
                         </div>
@@ -2147,9 +2528,15 @@ export default function ThreadPage() {
                         <div style={{
                           background: 'linear-gradient(135deg, #fdf2f8 0%, #fce7f3 50%, #fdf2f8 100%)'
                         }}>
-                          {posts.map((post, index) => (
+                                                    {/* 新しく取得した投稿（取得後の投稿） */}
+                      {hasFetchedAllPosts && getUniquePosts(posts.filter(post => {
+                        // 取得前の一番古い投稿番号を計算
+                        const oldestPostNumber = originalPosts.length > 0 ? Math.min(...originalPosts.map(p => p.postNumber || 0)) : 0;
+                        return post.postNumber < oldestPostNumber;
+                      })).map((post, index) => (
                             <div
-                              key={post._id}
+                              key={`fetched-${post._id}-${post.postNumber}`}
+                              data-post-number={post.postNumber}
                               className="p-3 border-b border-gray-300 bg-white rounded-lg shadow-md hover:shadow-lg transition-all duration-300"
                               style={{
                                 background: 'linear-gradient(to right, #fbd3e6, #fce4ec)',
@@ -2177,16 +2564,83 @@ export default function ThreadPage() {
                                   <div className="text-gray-800 leading-relaxed whitespace-pre-wrap break-words ml-0 post-content">
                                     {(() => {
                                       console.log("投稿内容:", post.content);
-                                      return post.content.includes('<img') ? (
-                                        <div 
-                                          dangerouslySetInnerHTML={{ 
-                                            __html: sanitizeHTML(post.content.replace(/<img/g, '<img crossorigin="anonymous"'))
-                                          }} 
-                                          className="post-content"
-                                        />
-                                      ) : (
-                                        renderPostContent(post.content)
-                                      );
+                                      return renderPostContent(post.content);
+                                    })()}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          {/* 前のレスを取得ボタンとメッセージ */}
+                          <div className="flex justify-center p-4">
+                            {!hasFetchedAllPosts ? (
+                              <button
+                                onClick={fetchAllPosts}
+                                disabled={isLoadingMore}
+                                className="flex items-center gap-2 px-6 py-3 text-sm font-bold text-gray-700 rounded-full shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 active:scale-95"
+                                style={{
+                                  background: 'linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 50%, #d1d5db 100%)',
+                                  boxShadow: '0 4px 15px rgba(243, 244, 246, 0.4)',
+                                  border: '2px solid #e5e7eb'
+                                }}
+                              >
+                                <i className="fas fa-chevron-up text-xs"></i>
+                                <span>{isLoadingMore ? "読み込み中..." : "前のレスを取得"}</span>
+                              </button>
+                            ) : (
+                              <div className="flex items-center gap-2 px-6 py-3 text-sm font-bold text-gray-600 rounded-full shadow-lg bg-gray-100 border-2 border-gray-300 cursor-not-allowed">
+                                <i className="fas fa-check text-green-600"></i>
+                                <span>取得しました</span>
+                              </div>
+                            )}
+                          </div>
+                          
+                          {/* 広告エリア（取得完了時に表示） */}
+                          {hasFetchedAllPosts && (
+                            <div className="w-full bg-white border-t-2 border-gray-300 py-4">
+                              <div className="max-w-4xl mx-auto flex justify-center">
+                                <AdBanner type="wide" />
+                              </div>
+                            </div>
+                          )}
+                          
+                          
+                          {/* 既存の投稿（取得前の投稿） */}
+                          {getUniquePosts(posts.filter(post => {
+                            // 取得前の一番古い投稿番号を計算
+                            const oldestPostNumber = originalPosts.length > 0 ? Math.min(...originalPosts.map(p => p.postNumber || 0)) : 0;
+                            return !hasFetchedAllPosts || post.postNumber >= oldestPostNumber;
+                          })).map((post, index) => (
+                            <div
+                              key={`main-${post._id}-${post.postNumber}`}
+                              data-post-number={post.postNumber}
+                              className="p-3 border-b border-gray-300 bg-white rounded-lg shadow-sm"
+                              style={{
+                                background: 'linear-gradient(to right, #fbd3e6, #fce4ec)',
+                                backgroundSize: 'auto',
+                                backgroundRepeat: 'repeat',
+                                backgroundBlendMode: 'overlay'
+                              }}
+                            >
+                              <div className="bg-white bg-opacity-90 p-3 rounded-lg shadow-sm">
+                                <div className="flex flex-col gap-1">
+                                  <div className="flex items-center gap-3">
+                                    <button
+                                      onClick={(e) => handleNumberClick(post.postNumber || 0, e)}
+                                      className="text-sm text-white px-3 py-1 rounded-md font-bold transition-all duration-300 cursor-pointer shadow-md hover:shadow-lg transform hover:scale-105 hover:-translate-y-0.5 active:scale-95"
+                                      style={{
+                                        background: 'linear-gradient(135deg, #fdf2f8 0%, #fce7f3 50%, #f9a8d4 100%)',
+                                        boxShadow: '0 2px 8px rgba(253, 242, 248, 0.3)',
+                                      }}
+                                    >
+                                      {post.postNumber || 0}
+                                    </button>
+                                    <span className="text-sm text-gray-700 font-medium">{new Date(post.createdAt).toLocaleString()}</span>
+                                  </div>
+                                  <div className="text-gray-800 leading-relaxed whitespace-pre-wrap break-words ml-0 post-content">
+                                    {(() => {
+                                      console.log("投稿内容:", post.content);
+                                      return renderPostContent(post.content);
                                     })()}
                                   </div>
                                 </div>
@@ -2204,8 +2658,8 @@ export default function ThreadPage() {
                     </div>
                   )}
                   
-                  {/* 下側ページネーション（常に表示） */}
-                  {totalPages > 1 && (
+                  {/* 下側ページネーション（前のレスを取得ボタンが押されていない場合のみ表示） */}
+                  {totalPages > 1 && !hasFetchedAllPosts && (
                     <div className="flex flex-col items-center gap-3 py-6 border-t border-gray-200" style={{
                       background: 'linear-gradient(135deg, #fdf2f8 0%, #fce7f3 50%, #fdf2f8 100%)'
                     }}>
@@ -2224,7 +2678,7 @@ export default function ThreadPage() {
                           <div className="ribbon-icon">
                             <i className="fas fa-chevron-left text-xs text-white"></i>
                           </div>
-                          <span>前のページ</span>
+                          <span>前へ</span>
                         </button>
                         
                         <div className="flex items-center gap-2 px-6 py-3 bg-white rounded-full shadow-lg border-2 border-pink-200" style={{backgroundColor: '#ffffff'}}>
@@ -2243,7 +2697,7 @@ export default function ThreadPage() {
                             border: '2px solid #ffb6c1'
                           }}
                         >
-                          <span>次のページ</span>
+                          <span>次へ</span>
                           <div className="ribbon-icon">
                             <i className="fas fa-chevron-right text-xs text-white"></i>
                           </div>
@@ -2252,7 +2706,7 @@ export default function ThreadPage() {
                       
                       {/* 表示件数行 */}
                       <div className="text-sm text-gray-600 font-medium bg-white px-4 py-2 rounded-full shadow-md border border-gray-200" style={{backgroundColor: '#ffffff'}}>
-                        全{totalPosts}件中 {((currentPage - 1) * 40) + 1}-{Math.min(currentPage * 40, totalPosts)}件を表示
+                        全{totalPosts}件中 {((currentPage - 1) * 15) + 1}-{Math.min(currentPage * 15, totalPosts)}件を表示
                       </div>
                     </div>
                   )}
@@ -2360,7 +2814,7 @@ export default function ThreadPage() {
         const shouldShow = showMainModals[index];
         console.log(`モーダル ${index} の表示判定:`, shouldShow);
         return shouldShow && (
-          <div key={index} className="fixed inset-0 z-50 animate-fadeIn pointer-events-none">
+          <div key={`main-${mainPost._id || index}`} className="fixed inset-0 z-50 animate-fadeIn pointer-events-none">
             <div className="bg-white rounded-lg border border-black shadow-xl max-w-sm w-full max-h-64 overflow-y-auto animate-fadeIn pointer-events-auto" style={{ position: 'fixed', backgroundColor: 'white', ...getModalPosition(index) }}>
               <div className="p-3" style={{ backgroundColor: 'white' }}>
                 <div className="flex justify-between items-center mb-2">
@@ -2387,9 +2841,9 @@ export default function ThreadPage() {
       })}
 
       {/* ネストした投稿詳細モーダル */}
-      {nestedPosts.map((nestedPost, index) => (
-        showNestedModals[index] && (
-          <div key={index} className="fixed inset-0 z-50 animate-fadeIn pointer-events-none">
+      {nestedPosts.map((nestedPost, index) => 
+        showNestedModals[index] ? (
+          <div key={`nested-${nestedPost._id || index}`} className="fixed inset-0 z-50 animate-fadeIn pointer-events-none">
             <div className="bg-white rounded-lg border border-black shadow-xl max-w-sm w-full max-h-64 overflow-y-auto animate-fadeIn pointer-events-auto" style={{ position: 'fixed', backgroundColor: 'white', ...getNestedModalPosition(index) }}>
               <div className="p-3" style={{ backgroundColor: 'white' }}>
                 <div className="flex justify-between items-center mb-2">
@@ -2412,8 +2866,8 @@ export default function ThreadPage() {
               </div>
             </div>
           </div>
-        )
-      ))}
+        ) : null
+      )}
     </div>
   );
 }

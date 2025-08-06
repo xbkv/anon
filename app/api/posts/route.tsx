@@ -67,7 +67,10 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const threadId = searchParams.get('threadId');
     const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '20');
+    const limit = parseInt(searchParams.get('limit') || '15');
+    const pre = parseInt(searchParams.get('pre') || '0');
+    const now = parseInt(searchParams.get('now') || '0');
+    const getLatestOnly = searchParams.get('getLatestOnly') === 'true';
     
     if (!threadId) {
       return NextResponse.json({ error: "threadId is required" }, { status: 400 });
@@ -76,16 +79,52 @@ export async function GET(request: NextRequest) {
     const client = await clientPromise;
     const db = client.db("pencha");
     
-    const skip = (page - 1) * limit;
+    // 最新投稿番号のみを取得する場合
+    if (getLatestOnly) {
+      const latestPost = await db.collection("posts")
+        .find({ threadId: threadId })
+        .sort({ postNumber: -1 })
+        .limit(1)
+        .toArray();
+      
+      const latestPostNumber = latestPost.length > 0 ? latestPost[0].postNumber : 0;
+      const totalPosts = await db.collection("posts").countDocuments({ threadId: threadId });
+      
+      return NextResponse.json({
+        latestPostNumber,
+        totalPosts,
+        hasNewPosts: latestPostNumber > 0
+      });
+    }
     
-    const posts = await db.collection("posts")
-      .find({ threadId: threadId })
-      .sort({ createdAt: 1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    let posts;
+    let totalPosts;
+    
+    // 2chスタイルのパラメータ（pre, now）が指定されている場合
+    if (pre > 0 && now > 0) {
+      // preからnowまでの投稿を取得
+      posts = await db.collection("posts")
+        .find({ 
+          threadId: threadId,
+          postNumber: { $gte: pre, $lte: now }
+        })
+        .sort({ postNumber: 1 })
+        .toArray();
+      
+      totalPosts = await db.collection("posts").countDocuments({ threadId: threadId });
+    } else {
+      // 従来のページネーション方式
+      const skip = (page - 1) * limit;
+      
+      posts = await db.collection("posts")
+        .find({ threadId: threadId })
+        .sort({ createdAt: 1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
 
-    const totalPosts = await db.collection("posts").countDocuments({ threadId: threadId });
+      totalPosts = await db.collection("posts").countDocuments({ threadId: threadId });
+    }
     
     return NextResponse.json({
       posts,
