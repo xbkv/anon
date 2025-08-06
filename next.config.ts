@@ -1,34 +1,23 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // experimental: {
-  //   reactCompiler: true,
-  // },
-  images: {
-    domains: ['cdn.yay.space'],
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'cdn.yay.space',
-        port: '',
-        pathname: '/**',
-      },
-    ],
-  },
   env: {
     CUSTOM_KEY: process.env.CUSTOM_KEY,
   },
-  // 本番環境でのパフォーマンス最適化
-  compress: true,
-  poweredByHeader: false,
-  generateEtags: false,
-  // ESLintを無効化
-  eslint: {
-    ignoreDuringBuilds: true,
+  experimental: {
+    serverComponentsExternalPackages: ['socket.io'],
   },
-  // TypeScriptの型チェックを無効化
-  typescript: {
-    ignoreBuildErrors: true,
+  async headers() {
+    return [
+      {
+        source: '/socket.io/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET,POST,OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: 'Content-Type' },
+        ],
+      },
+    ];
   },
 };
 

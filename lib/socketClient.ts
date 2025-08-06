@@ -4,7 +4,14 @@ let socket: Socket | null = null;
 
 export const initializeSocket = () => {
   if (!socket) {
-    socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000', {
+    // 環境に応じてSocket.IOサーバーのURLを決定
+    const socketUrl = process.env.NODE_ENV === 'production' 
+      ? `${window.location.protocol}//${window.location.hostname}:4545`  // 本番環境では専用ポートを使用
+      : (process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4545');
+    
+    console.log('Socket.IO connecting to:', socketUrl);
+    
+    socket = io(socketUrl, {
       path: '/socket.io',
       autoConnect: true,
       reconnection: true,

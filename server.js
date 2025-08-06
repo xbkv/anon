@@ -4,13 +4,15 @@ const next = require('next');
 const { Server } = require('socket.io');
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = 'localhost';
+const hostname = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost';
 const port = process.env.PORT || 3000;
+const socketPort = process.env.SOCKET_PORT || 4545; // Socket.IO専用ポート
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
+  // メインのNext.jsサーバー
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url, true);
@@ -22,13 +24,19 @@ app.prepare().then(() => {
     }
   });
 
-  // Socket.IOサーバーを初期化
-  const io = new Server(server, {
+  // Socket.IO専用サーバー
+  const socketServer = createServer();
+  const io = new Server(socketServer, {
     path: '/socket.io',
     addTrailingSlash: false,
     cors: {
       origin: process.env.NODE_ENV === 'production' 
-        ? ['https://yourdomain.com'] 
+        ? [
+            'https://jirai-keijiban.com',
+            'https://www.jirai-keijiban.com',
+            'http://jirai-keijiban.com',
+            'http://www.jirai-keijiban.com'
+          ] 
         : ['http://localhost:3000'],
       methods: ['GET', 'POST'],
       credentials: true,
@@ -60,8 +68,15 @@ app.prepare().then(() => {
   // グローバル変数に保存（他のファイルからアクセス可能にするため）
   global.io = io;
 
+  // メインサーバーを起動
   server.listen(port, (err) => {
     if (err) throw err;
-    console.log(`> Ready on http://${hostname}:${port}`);
+    console.log(`> Main server ready on http://${hostname}:${port}`);
+  });
+
+  // Socket.IO専用サーバーを起動
+  socketServer.listen(socketPort, (err) => {
+    if (err) throw err;
+    console.log(`> Socket.IO server ready on http://${hostname}:${socketPort}`);
   });
 }); 
