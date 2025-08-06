@@ -174,9 +174,18 @@ export async function POST(request: NextRequest) {
     
     const result = await db.collection("posts").insertOne(post);
     
+    // Socket.IOで新しい投稿を通知
+    const postWithId = { ...post, _id: result.insertedId };
+    
+    // グローバルなSocket.IOインスタンスを使用
+    if (global.io) {
+      global.io.to(`thread_${threadId}`).emit('new_post', postWithId);
+      console.log(`New post notification sent to thread ${threadId}`);
+    }
+    
     return NextResponse.json({ 
       success: true, 
-      post: { ...post, _id: result.insertedId } 
+      post: postWithId 
     });
   } catch {
     console.error("投稿作成エラー");

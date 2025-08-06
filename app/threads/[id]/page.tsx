@@ -6,6 +6,7 @@ import ReCAPTCHA from "react-google-recaptcha";
 import { Thread, Post } from "@/app/types/global";
 import AdBanner from "@/components/AdBanner";
 import DOMPurify from "dompurify";
+import { joinThread, leaveThread, onNewPost, offNewPost, disconnectSocket } from "@/lib/socketClient";
 
 // お絵描き機能のコンポーネント
 const DrawingModal = ({ isOpen, onClose, onSave }: { 
@@ -592,17 +593,48 @@ export default function ThreadPage() {
     fetchThread();
   }, [params.id]);
 
-  // SSE接続のref
-  const eventSourceRef = useRef<EventSource | null>(null);
+  // Socket.IO接続のref
+  const socketRef = useRef<any>(null);
 
-  // 投稿を取得（高速初期ロード + SSE）
+  // Socket.IOリアルタイム通信の初期化
   useEffect(() => {
     if (!params.id) return;
 
-    // 既存のSSE接続を閉じる
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
+    // Socket.IOでスレッドに参加
+    joinThread(params.id as string);
+
+    // 新しい投稿のイベントリスナーを設定
+    onNewPost((postData) => {
+      console.log('Socket.IO: 新しい投稿を受信:', postData);
+      
+      // 新しい投稿をUIに追加
+      setPosts(prevPosts => {
+        const combinedPosts = [...prevPosts, postData];
+        return combinedPosts.sort((a, b) => (a.postNumber || 0) - (b.postNumber || 0));
+      });
+      
+      // 最新の投稿番号を更新
+      setLastAcquiredPostNumber(postData.postNumber);
+      
+      // 投稿数とページ数を更新
+      setTotalPosts(prev => prev + 1);
+      setTotalPages(Math.ceil((totalPosts + 1) / 15));
+      
+      // 新しい投稿の通知
+      setNewPosts([postData]);
+      setTimeout(() => setNewPosts([]), 1000);
+    });
+
+    // クリーンアップ
+    return () => {
+      leaveThread(params.id as string);
+      offNewPost();
+    };
+  }, [params.id]);
+
+  // 投稿を取得（高速初期ロード + Socket.IO）
+  useEffect(() => {
+    if (!params.id) return;
 
     // 初期ロード時は即座にAPIでデータを取得
     if (isInitialLoad) {
@@ -614,24 +646,19 @@ export default function ThreadPage() {
       const urlPostNumber = getPostNumberFromUrl();
       console.log(`URLから取得した投稿番号: ${urlPostNumber}`);
       
-              if (!urlPostNumber) {
-          // 投稿番号が指定されていない場合は最新の15個の投稿を取得
-          console.log("投稿番号が指定されていないため、最新の15個の投稿を取得します");
-          // 状態をリセットしてから取得
-          resetPostsState();
-          fetchLatestPosts().then(() => {
-            console.log("初期データ取得完了（最新の15個の投稿）");
-            setIsLoading(false);
-            // 初期データ取得完了後にポーリングを開始
-            setTimeout(() => {
-              startPolling();
-            }, 1000); // 1秒遅延でlastAcquiredPostNumberの設定を待つ
-          }).catch((error: any) => {
-            console.error("初期データ取得エラー:", error);
-            setIsLoading(false);
-            startPolling();
-          });
-        } else {
+      if (!urlPostNumber) {
+        // 投稿番号が指定されていない場合は最新の15個の投稿を取得
+        console.log("投稿番号が指定されていないため、最新の15個の投稿を取得します");
+        // 状態をリセットしてから取得
+        resetPostsState();
+        fetchLatestPosts().then(() => {
+          console.log("初期データ取得完了（最新の15個の投稿）");
+          setIsLoading(false);
+        }).catch((error: any) => {
+          console.error("初期データ取得エラー:", error);
+          setIsLoading(false);
+        });
+      } else {
         // 特定の投稿番号が指定されている場合はその投稿を含むページを取得
         console.log(`投稿番号${urlPostNumber}が指定されているため、その投稿を含むページを取得します`);
         searchPostByNumber(urlPostNumber).then((post) => {
@@ -641,7 +668,6 @@ export default function ThreadPage() {
             fetchPosts(targetPage).then(() => {
               console.log(`初期データ取得完了（投稿番号${urlPostNumber}を含む${targetPage}ページ目）`);
               setIsLoading(false);
-              startPolling();
             });
           } else {
             // 投稿が見つからない場合は最新ページを取得
@@ -649,175 +675,14 @@ export default function ThreadPage() {
             goToLatestPage().then(() => {
               console.log("投稿が見つからないため最新ページを取得");
               setIsLoading(false);
-              startPolling();
             });
           }
         }).catch((error: any) => {
           console.error("初期データ取得エラー:", error);
           setIsLoading(false);
-          startPolling();
         });
       }
-    } else {
-      // 通常の更新時はポーリングを開始
-      console.log("通常更新: ポーリングを開始");
-      startPolling();
     }
-
-    // SSE接続を開始する関数
-    function startSSEConnection() {
-      // 全投稿を取得済みの場合はSSE接続を開始しない
-      if (hasFetchedAllPosts) {
-        console.log("全投稿を取得済みのため、SSE接続を開始しません");
-        return;
-      }
-      
-      // 既存の接続を閉じる
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-
-      // SSE接続は最新投稿の監視のみ（ページネーションとは完全に独立）
-      const eventSource = new EventSource(`/api/posts/sse?threadId=${params.id}&page=1&limit=40`);
-      eventSourceRef.current = eventSource;
-
-      eventSource.onopen = () => {
-        console.log("SSE接続が確立されました");
-      };
-
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === 'update') {
-            console.log("SSE更新を受信:", data);
-            const receivedPosts = data.posts || [];
-            console.log("受信した投稿数:", receivedPosts.length);
-            
-            // ページネーション情報を更新
-            if (data.pagination) {
-              setTotalPages(data.pagination.totalPages);
-              setTotalPosts(data.pagination.totalPosts);
-            }
-            
-            // SSEで新しい投稿を監視
-            console.log(`SSE更新: 現在のページ=${currentPage}, 最新ページ=${data.pagination?.totalPages || 1}`);
-            
-            // 新しい投稿を検出して追加表示
-            if (receivedPosts.length > 0) {
-              console.log(`SSE受信: ${receivedPosts.length}件の投稿を受信`);
-              
-              if (posts.length > 0) {
-                // 既存の投稿と新しい投稿を比較
-                const currentLatestPostNumber = Math.max(...posts.map((p: Post) => p.postNumber || 0));
-                const receivedLatestPostNumber = Math.max(...receivedPosts.map((p: Post) => p.postNumber || 0));
-                
-                console.log(`現在の最新投稿番号: ${currentLatestPostNumber}, 受信した最新投稿番号: ${receivedLatestPostNumber}`);
-                
-                if (receivedLatestPostNumber > currentLatestPostNumber) {
-                  console.log("新しい投稿を検出しました");
-                  
-                  // 新しい投稿を特定
-                  const actualNewPosts = receivedPosts.filter((p: Post) => (p.postNumber || 0) > currentLatestPostNumber);
-                  
-                  if (actualNewPosts.length > 0) {
-                    console.log(`新しい投稿数: ${actualNewPosts.length}`);
-                    console.log(`新しい投稿の投稿番号: ${actualNewPosts.map((p: Post) => p.postNumber).join(', ')}`);
-                    
-                    // 全投稿を取得済みの場合は新しい投稿を追加しない
-                    if (hasFetchedAllPosts) {
-                      console.log("全投稿を取得済みのため、新しい投稿の追加を停止します");
-                      return;
-                    }
-                    
-                    // 最新ページにいる場合は投稿リストに追加
-                    const latestPage = data.pagination?.totalPages || 1;
-                    if (currentPage === latestPage) {
-                      console.log("最新ページなので、新しい投稿を追加表示します");
-                      // 新しい投稿を既存の投稿に追加してソート
-                      setPosts(prev => {
-                        const updatedPosts = [...prev, ...actualNewPosts].sort((a, b) => (a.postNumber || 0) - (b.postNumber || 0));
-                        console.log(`更新後の投稿数: ${updatedPosts.length}`);
-                        return updatedPosts;
-                      });
-                    } else {
-                      // 最新ページ以外にいる場合は新しい投稿を通知
-                      console.log(`現在のページ(${currentPage})は最新ページ(${latestPage})ではないため、新しい投稿を通知します`);
-                      setNewPosts(prev => [...actualNewPosts, ...prev]);
-                    }
-                  }
-                } else {
-                  console.log("新しい投稿はありません");
-                }
-              } else {
-                // 初回ロード時は投稿リストを更新
-                console.log("初回ロードなので、投稿リストを更新します");
-                setPosts(receivedPosts);
-              }
-            }
-          } else if (data.type === 'error') {
-            console.error("SSEエラー:", data.message);
-          }
-        } catch (error) {
-          console.error("SSEデータ解析エラー:", error);
-        }
-      };
-
-      eventSource.onerror = (error) => {
-        console.error("SSE接続エラー:", error);
-        
-        // 接続が閉じられた場合の処理
-        if (eventSource.readyState === EventSource.CLOSED) {
-          console.log("SSE接続が閉じられました");
-          // 全投稿を取得済みでない場合のみ再接続を試行
-          if (!hasFetchedAllPosts) {
-            setTimeout(() => {
-              if (!document.hidden) {
-                console.log("SSE接続を再試行します");
-                startSSEConnection();
-              }
-            }, 5000);
-          } else {
-            console.log("全投稿を取得済みのため、SSE接続を再試行しません");
-          }
-        } else {
-          // その他のエラー時は従来のAPIにフォールバック
-          fetchPosts(currentPage);
-        }
-      };
-
-      // ページが非表示になった時の処理（APIコール削減のため簡素化）
-      const handleVisibilityChange = () => {
-        if (document.hidden) {
-          console.log("ページが非表示になったため、ポーリングを停止します");
-          stopPolling();
-        } else {
-          // 全投稿を取得済みの場合はポーリングを再開しない
-          if (!hasFetchedAllPosts) {
-            console.log("ページが表示されたため、ポーリングを再開します");
-            startPolling();
-          } else {
-            console.log("全投稿を取得済みのため、ポーリングを再開しません");
-          }
-        }
-      };
-
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-
-      // クリーンアップ関数を返す
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-      };
-    }
-
-    // クリーンアップ
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-      // ポーリングを停止
-      stopPolling();
-    };
   }, [params.id, isInitialLoad]);
 
   // 最新の15個の投稿を取得する関数
@@ -1754,11 +1619,8 @@ export default function ThreadPage() {
     const newUrl = `/threads/${params.id}`;
     window.history.pushState({ page: newPage }, '', newUrl);
     
-    // SSE接続を一時的に閉じてページネーションを保護
-    if (eventSourceRef.current) {
-      console.log("ページ変更時にSSE接続を一時的に閉じます");
-      eventSourceRef.current.close();
-    }
+    // Socket.IO接続は維持（ページ変更時もリアルタイム更新を継続）
+    console.log("ページ変更時もSocket.IO接続を維持します");
     
     // 従来のAPIでデータを取得（15個ずつ）
     fetchPosts(newPage).then(() => {
