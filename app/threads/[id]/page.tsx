@@ -1421,6 +1421,7 @@ export default function ThreadPage() {
               postNumber: postNumber,
               content: `投稿番号 ${postNumber} は存在しません。`,
               createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
               clickPosition: { top: rect.top, left: rect.left }
             };
             console.log("存在しない投稿オブジェクト:", notFoundPost);
