@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import clientPromise from "@/lib/mongodb";
-import { verifyAuthToken } from "@/lib/auth";
+import { verifyAuthToken } from "../../auth/verify/route";
 
 // 一時保存された画像の管理
 interface TempImage {

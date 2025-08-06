@@ -12,7 +12,7 @@ export const initializeSocket = () => {
     console.log('Socket.IO connecting to:', socketUrl);
     
     socket = io(socketUrl, {
-      path: '/socket.io',
+      path: '/api/socket',
       autoConnect: true,
       reconnection: true,
       reconnectionDelay: 1000,
@@ -60,7 +60,7 @@ export const leaveThread = (threadId: string) => {
   console.log(`Left thread: ${threadId}`);
 };
 
-export const onNewPost = (callback: (_postData: any) => void) => {
+export const onNewPost = (callback: (postData: any) => void) => {
   const socket = getSocket();
   socket.on('new_post', callback);
 };

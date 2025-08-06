@@ -1,10 +1,7 @@
 import { MongoClient } from 'mongodb';
-import DOMPurify from 'dompurify';
 
 declare global {
-  let io: any;
-  let MongoClient: MongoClient;
-  let DOMPurify: DOMPurify;
+  let DOMPurify: any;
 }
 
 export interface Thread {
@@ -24,10 +21,6 @@ export interface Post {
   author?: string;
   createdAt: string;
   updatedAt: string;
-  clickPosition?: {
-    top: number;
-    left: number;
-  };
 }
 
 export {};

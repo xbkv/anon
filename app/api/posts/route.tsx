@@ -178,8 +178,8 @@ export async function POST(request: NextRequest) {
     const postWithId = { ...post, _id: result.insertedId };
     
     // グローバルなSocket.IOインスタンスを使用
-    if ((global as any).io) {
-      (global as any).io.to(`thread_${threadId}`).emit('new_post', postWithId);
+    if (global.io) {
+      global.io.to(`thread_${threadId}`).emit('new_post', postWithId);
       console.log(`New post notification sent to thread ${threadId}`);
     }
     

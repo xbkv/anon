@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import clientPromise from "@/lib/mongodb";
-import { saveAuthSession } from "@/lib/auth";
+
+// 認証セッション管理用のMap
+const authSessions = new Map<string, { userId: string; expiresAt: number }>();
 
 export async function POST(req: Request) {
   try {
@@ -37,7 +39,10 @@ export async function POST(req: Request) {
     const expiresAt = Date.now() + (60 * 1000); // 1分
     
     // セッションを保存
-    saveAuthSession(token, user._id.toString(), expiresAt);
+    authSessions.set(token, {
+      userId: user._id.toString(),
+      expiresAt: expiresAt
+    });
 
     return NextResponse.json({
       success: true,
@@ -52,5 +57,32 @@ export async function POST(req: Request) {
       { success: false, message: "認証に失敗しました。" },
       { status: 500 }
     );
+  }
+}
+
+// 認証トークンを検証する関数（他のAPIで使用）
+export function verifyAuthToken(token: string): { isValid: boolean; userId?: string } {
+  const session = authSessions.get(token);
+  
+  if (!session) {
+    return { isValid: false };
+  }
+  
+  // 有効期限チェック
+  if (Date.now() > session.expiresAt) {
+    authSessions.delete(token);
+    return { isValid: false };
+  }
+  
+  return { isValid: true, userId: session.userId };
+}
+
+// 古いセッションをクリーンアップする関数
+export function cleanupExpiredSessions() {
+  const now = Date.now();
+  for (const [token, session] of authSessions.entries()) {
+    if (now > session.expiresAt) {
+      authSessions.delete(token);
+    }
   }
 } 

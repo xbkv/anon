@@ -840,10 +840,10 @@ export default function ThreadPage() {
           setTimeout(() => setNewPosts([]), 1000);
           
           console.log(`レス追加完了: ${data.posts.length}件の新しいレスをHTMLに追加しました`);
-        } else {
+                    } else {
           console.log('新しいレスは検出されましたが、実際のレスデータが取得できませんでした');
-        }
-      } else {
+                  }
+                } else {
         console.log('新しいレスはありません');
       }
     } catch (error) {
@@ -961,13 +961,13 @@ export default function ThreadPage() {
         stopPolling();
         
         // 取得前の一番古い投稿の場所にスクロール
-        setTimeout(() => {
+          setTimeout(() => {
           const oldestPostElement = document.querySelector(`[data-post-number="${oldestPostNumber}"]`);
           if (oldestPostElement) {
             oldestPostElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }
         }, 100); // 少し遅延を入れてDOMの更新を待つ
-      } else {
+        } else {
         console.error("すべての投稿の取得に失敗");
       }
     } catch (error) {
@@ -1421,7 +1421,6 @@ export default function ThreadPage() {
               postNumber: postNumber,
               content: `投稿番号 ${postNumber} は存在しません。`,
               createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
               clickPosition: { top: rect.top, left: rect.left }
             };
             console.log("存在しない投稿オブジェクト:", notFoundPost);
@@ -2404,12 +2403,12 @@ export default function ThreadPage() {
                                 </button>
                                 <span className="text-sm text-gray-700 font-medium">{new Date(post.createdAt).toLocaleString()}</span>
                               </div>
-                                                                <div className="text-gray-800 leading-relaxed whitespace-pre-wrap break-words ml-0 post-content">
-                                    {(() => {
-                                      console.log("新しい投稿内容:", post.content);
+                              <div className="text-gray-800 leading-relaxed whitespace-pre-wrap break-words ml-0 post-content">
+                                {(() => {
+                                  console.log("新しい投稿内容:", post.content);
                                       return renderPostContent(post.content);
-                                    })()}
-                                  </div>
+                                })()}
+                              </div>
                             </div>
                           </div>
                         </div>
