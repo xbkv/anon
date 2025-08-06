@@ -6,8 +6,8 @@ export const initializeSocket = () => {
   if (!socket) {
     // 環境に応じてSocket.IOサーバーのURLを決定
     const socketUrl = process.env.NODE_ENV === 'production' 
-      ? `${window.location.protocol}//${window.location.hostname}:4545`  // 本番環境では専用ポートを使用
-      : (process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4545');
+      ? window.location.origin  // Vercelでは同じドメインを使用
+      : (process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000');
     
     console.log('Socket.IO connecting to:', socketUrl);
     
