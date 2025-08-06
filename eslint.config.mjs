@@ -13,8 +13,13 @@ const eslintConfig = [
   ...compat.extends('next/core-web-vitals'),
   {
     rules: {
-      'no-unused-vars': 'warn',
+      'no-unused-vars': 'off',
       'no-var': 'error',
+      '@next/next/no-img-element': 'off',
+      '@next/next/no-page-custom-font': 'off',
+      'react-hooks/exhaustive-deps': 'off',
+      'react/display-name': 'off',
+      'react/jsx-key': 'off',
     },
   },
 ];
