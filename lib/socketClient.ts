@@ -5,14 +5,16 @@ let socket: Socket | null = null;
 export const initializeSocket = () => {
   if (!socket) {
     // 環境に応じてSocket.IOサーバーのURLを決定
-    const socketUrl = process.env.NODE_ENV === 'production' 
-      ? window.location.origin  // Vercelでは同じドメインを使用
-      : (process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000');
+    // 本番環境では同一オリジン(443 or 80) 経由で接続し、開発時のみ localhost:4545 を使用
+    const socketUrl = process.env.NODE_ENV === 'production'
+      ? `${window.location.origin}`
+      : (process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:4545');
     
     console.log('Socket.IO connecting to:', socketUrl);
     
     socket = io(socketUrl, {
-      path: '/api/socket',
+      path: '/socket.io',
+      transports: ['websocket'],
       autoConnect: true,
       reconnection: true,
       reconnectionDelay: 1000,
